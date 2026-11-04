@@ -319,3 +319,10 @@ pre.errmsg { background: var(--surface); color: var(--again); margin: 6px 0; }
 .shorts li { margin: 6px 0; }
 .foot { margin-top: 28px; }
 .tp { overflow-wrap: anywhere; }
+
+.newfiles figure { margin: 8px 0; }
+.newfiles img, .exfile-img { max-width: 100%; height: auto; border-radius: var(--radius-s); border: 1px solid var(--line); background: repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 0 0 / 16px 16px; }
+.newfiles figcaption { font-size: 14px; color: var(--muted); }
+pre.val.nolabel::before { content: none; }
+.exfiles { background: var(--surface); border-radius: var(--radius-m); padding: 8px 14px; margin: 12px 0; }
+.exfiles details { margin: 4px 0; }

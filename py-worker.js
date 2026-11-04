@@ -21,10 +21,13 @@ self.onmessage = async (e) => {
     return;
   }
   if (m.type === 'run') {
-    py.setStdout({ batched: (s) => post({ type: 'out', s }) });
-    py.setStderr({ batched: (s) => post({ type: 'err', s }) });
+    // salida cruda (sin cortar por líneas), para que lo que se escribe sin salto de línea, como los puntos de pytest, quede junto
+    const dOut = new TextDecoder(), dErr = new TextDecoder();
+    py.setStdout({ write: (b) => { post({ type: 'out', s: dOut.decode(b, { stream: true }) }); return b.length; } });
+    py.setStderr({ write: (b) => { post({ type: 'err', s: dErr.decode(b, { stream: true }) }); return b.length; } });
     try {
-      await py.loadPackagesFromImports(m.code + '\n' + (m.tests || ''), {
+      const extra = /^# === test_|pytest/m.test(m.code + (m.tests || '')) ? '\nimport pytest' : '';
+      await py.loadPackagesFromImports(m.code + '\n' + (m.tests || '') + extra, {
         messageCallback: (msg) => { if (/^Loading/.test(msg)) post({ type: 'status', msg: 'Cargando ' + msg.replace(/^Loading\s+/, '') + '…' }); },
         errorCallback: () => {},
       });
@@ -33,7 +36,7 @@ self.onmessage = async (e) => {
     let res;
     try {
       // undefined llega a Python como None (null llegaría como jsnull)
-      const r = await runner.ejecutar(m.code, typeof m.tests === 'string' ? m.tests : undefined, Array.isArray(m.inputs) ? m.inputs : undefined, m.argv || []);
+      const r = await runner.ejecutar(m.code, typeof m.tests === 'string' ? m.tests : undefined, Array.isArray(m.inputs) ? m.inputs : undefined, m.argv || [], m.files || undefined);
       res = r.toJs({ dict_converter: Object.fromEntries });
       r.destroy();
     } catch (err) {

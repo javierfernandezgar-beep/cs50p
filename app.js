@@ -503,13 +503,14 @@ const Py = {
   start() {
     if (this.ready) return this.ready;
     this.ready = (async () => {
-      const [prac, runnerSrc] = await Promise.all([loadPractice(), fetch('py/runner.py').then((r) => { if (!r.ok) throw new Error('runner'); return r.text(); })]);
+      const txt = (f) => fetch('py/' + f).then((r) => { if (!r.ok) throw new Error(f); return r.text(); });
+      const [prac, runnerSrc, requestsSrc] = await Promise.all([loadPractice(), txt('runner.py'), txt('requests.py')]);
       const w = new Worker('py-worker.js', { type: 'module' });
       this.worker = w;
       await new Promise((res, rej) => {
         w.onmessage = (e) => { if (e.data.type === 'ready') res(); else if (e.data.type === 'fatal') rej(new Error(e.data.msg)); };
         w.onerror = (e) => rej(new Error(e.message || 'No se pudo arrancar Python'));
-        w.postMessage({ type: 'init', files: { 'curso.py': prac.helper, 'runner.py': runnerSrc } });
+        w.postMessage({ type: 'init', files: { 'curso.py': prac.helper, 'runner.py': runnerSrc, 'requests.py': requestsSrc } });
       });
       w.onmessage = (e) => this.handler && this.handler(e.data);
       w.onerror = (e) => this.handler && this.handler({ type: 'crash', msg: e.message });
@@ -529,7 +530,7 @@ const Py = {
         else if (m.type === 'done') finish(m.res);
         else if (m.type === 'crash') { this.reset(); finish({ ok: false, phase: 'code', error: { type: 'Error', msg: m.msg || 'Python se ha detenido', hint: '' } }); }
       };
-      this.worker.postMessage({ type: 'run', code, tests, inputs: io.inputs, argv: io.argv });
+      this.worker.postMessage({ type: 'run', code, tests, inputs: io.inputs, argv: io.argv, files: S.files || '' });
     });
   },
 };
@@ -598,7 +599,7 @@ function wireKeys() {
 const ioStore = { all() { try { return JSON.parse(store.get(INPUT_STORE)) || {}; } catch { return {}; } },
   get(id) { return this.all()[id]; }, set(id, v) { const a = this.all(); a[id] = v; store.set(INPUT_STORE, JSON.stringify(a)); } };
 function ioPanel(id, defInputs, defArgs, withArgs) {
-  const st = ioStore.get(id) || { on: !!defInputs, inputs: defInputs || '', args: defArgs || '' };
+  const st = ioStore.get(id) || { on: !!(defInputs || defArgs), inputs: defInputs || '', args: defArgs || '' };
   return `<div class="io">
     <label class="chk-line"><input type="checkbox" id="io-on"${st.on ? ' checked' : ''}> Entradas</label>
     <div id="io-box"${st.on ? '' : ' hidden'}>
@@ -622,6 +623,22 @@ function ioValues() {
   return { inputs: lines, argv: a ? a.split(/\s+/) : [] };
 }
 
+// Archivos que ha creado o cambiado el programa (imágenes y texto)
+function filesHtml(files) {
+  if (!files || !files.length) return '';
+  return '<div class="newfiles"><p class="small muted">Archivos que ha creado o cambiado tu programa:</p>' + files.map((f) => f.b64
+    ? (f.mime.startsWith('image/') ? `<figure><img src="data:${f.mime};base64,${f.b64}" alt="${esc(f.name)}"><figcaption>${esc(f.name)}</figcaption></figure>`
+      : `<p><a class="btn small" download="${esc(f.name)}" href="data:${f.mime};base64,${f.b64}">Descargar ${esc(f.name)}</a></p>`)
+    : `<details open><summary><code>${esc(f.name)}</code></summary><pre class="val nolabel">${esc(f.text)}</pre></details>`).join('') + '</div>';
+}
+function exFilesHtml(files) {
+  if (!files) return '';
+  const names = Object.keys(files);
+  return `<div class="exfiles"><p class="small"><b>Archivos en la carpeta del ejercicio:</b> ${names.map((n) => `<code>${esc(n)}</code>`).join(', ')}. Tu programa puede abrirlos por su nombre.</p>
+    ${names.map((n) => files[n].t !== undefined ? `<details><summary><code>${esc(n)}</code></summary><pre class="val nolabel">${esc(files[n].t.slice(0, 4000))}</pre></details>`
+      : /\.(png|jpe?g|gif)$/i.test(n) ? `<details><summary><code>${esc(n)}</code></summary><img class="exfile-img" src="data:image/${n.split('.').pop().replace('jpg', 'jpeg')};base64,${files[n].b}" alt="${esc(n)}"></details>` : '').join('')}</div>`;
+}
+
 function renderResult(box, res, mode) {
   const err = (e) => `<div class="res bad"><p><b>${e.where === 'la comprobación' ? 'Error al comprobar' : 'Error'}${e.line ? ` en la línea ${e.line}${e.where ? ' de ' + e.where : ''}` : ''}</b></p>
     <pre class="errmsg">${esc(e.msg)}</pre>${e.hint ? `<p class="small">${esc(e.hint)}</p>` : ''}
@@ -629,6 +646,7 @@ function renderResult(box, res, mode) {
   if (res.timeout) { box.innerHTML = '<div class="res bad"><p><b>Detenido</b>: tu código tardaba más de 20 segundos. ¿Hay un bucle que no termina, o un input() esperando?</p></div>'; return; }
   let html = '';
   if (res.value && mode !== 'check') html += `<pre class="val">${esc(res.value)}</pre>`;
+  html += filesHtml(res.files);
   if (res.error) { box.innerHTML = html + (res.passed && res.passed.length ? `<ul class="checks">${res.passed.map((c) => `<li class="okc">${esc(c)}</li>`).join('')}</ul>` : '') + err(res.error); return; }
   if (mode === 'check') {
     const passed = (res.passed || []).map((c) => `<li class="okc">${esc(c)}</li>`).join('');
@@ -637,7 +655,10 @@ function renderResult(box, res, mode) {
       const [first, ...rest] = String(res.failed || '').split('\n');
       html += `<div class="res bad"><ul class="checks">${passed}<li class="koc">${esc(first)}${rest.length ? `<pre class="errmsg">${esc(rest.join('\n'))}</pre>` : ''}</li></ul></div>`;
     }
-  } else if (res.exit) html += '<p class="muted small">El programa ha terminado con <code>sys.exit</code>.</p>';
+  } else if (res.pytest !== undefined) html += res.pytest === 0 ? '<div class="res good"><p><b>pytest:</b> todas las pruebas pasan.</p></div>'
+    : res.pytest === 1 ? '<div class="res bad"><p><b>pytest:</b> alguna prueba falla. Mira arriba cuál y por qué.</p></div>'
+    : '<div class="res bad"><p><b>pytest</b> no ha podido ejecutar las pruebas. Revisa los nombres: las funciones deben empezar por <code>test_</code>.</p></div>';
+  else if (res.exit) html += '<p class="muted small">El programa ha terminado con <code>sys.exit</code>.</p>';
   else if (!html) html = '<p class="muted small">Ejecutado sin errores.</p>';
   box.innerHTML = html;
 }
@@ -656,7 +677,7 @@ async function runInto(code, tests, mode, onDone) {
       if (runInto.token !== token) return;
       if (m.type === 'status') st.textContent = m.msg;
       else if (m.type === 'started') st.textContent = mode === 'check' ? 'Comprobando…' : 'Ejecutando…';
-      else { out.textContent += m.s + '\n'; out.hidden = false; }
+      else { out.textContent += m.s; out.hidden = false; }
     });
   } catch (err) {
     r = { ok: false, error: { type: 'Error', msg: navigator.onLine ? String(err.message || err) : 'Sin conexión: Python aún no está descargado en este dispositivo. Conéctate una vez y vuelve a intentarlo.', hint: '' } };
@@ -699,6 +720,7 @@ async function renderExercise(id) {
     <h1>${esc(ex.title)}</h1>
     ${ex.official ? `<p class="small muted">Problema oficial de CS50 traducido. <a href="${esc(ex.url)}" target="_blank" rel="noopener">Enunciado original en inglés</a>. En el curso, el archivo se llama <code>${esc(ex.file)}</code>.</p>` : ''}
     <article class="notes">${ex.statement}</article>
+    ${exFilesHtml(ex.files)}
     <h2 class="code-h">Tu código</h2>
     ${keyBar()}
     <div id="ed" class="ed"></div>
@@ -713,6 +735,7 @@ async function renderExercise(id) {
       : `<div id="solbox" hidden><p class="small muted">Una forma de resolverlo (hay otras):</p><pre class="code"><code>${esc(ex.solution)}</code></pre>
       <div class="row"><button class="btn small" id="usesol" type="button">Copiar la solución al editor</button></div></div>`}
     <nav class="pager">${prev ? `<a href="#/practicar/${prev.id}"><small>Anterior</small>${esc(prev.title)}</a>` : ''}${next ? `<a class="next" href="#/practicar/${next.id}"><small>Siguiente</small>${esc(next.title)}</a>` : ''}</nav>`;
+  S.files = ex.files ? JSON.stringify(ex.files) : '';
   let saveT = null;
   const ok = await mountEditor(drafts.get(id) ?? ex.starter, (code) => { clearTimeout(saveT); saveT = setTimeout(() => drafts.set(id, code), 400); });
   if (!ok) return;
@@ -759,6 +782,7 @@ async function renderFree() {
     ${consoleHtml}
     <h2>Librerías disponibles sin conexión</h2>
     <p class="small">Toda la biblioteca estándar de Python ${esc(S.meta.pyVersion || '')} y además: ${esc((S.meta.libs || []).join(', '))}. La primera vez que importas una, tarda un poco más.</p>`;
+  S.files = '';
   let saveT = null;
   const ok = await mountEditor(drafts.get('libre') ?? FREE_START, (code) => { clearTimeout(saveT); saveT = setTimeout(() => drafts.set('libre', code), 400); });
   if (!ok) return;
