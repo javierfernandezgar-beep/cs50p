@@ -3,7 +3,7 @@
   "short_name": "CS50P",
   "description": "Apuntes, transcripciones, tarjetas y prácticas de Python de CS50P (Harvard), en español y sin conexión.",
   "lang": "es",
-  "id": "./?app=cs50p",
+  "id": "/cs50p-estudio/",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
